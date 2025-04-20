@@ -24,6 +24,8 @@ enum {
 #define USERLEN_S "30"
 #define MAXCMD 255
 
+#define MAXPATHLEN 2048
+
 extern int state;
 extern char user[USERLEN + 1];
 extern struct sockaddr_in sa;
@@ -51,6 +53,8 @@ void command_port(char *);
 void command_stor(char *);
 void command_mget(char *);
 void command_mput(char *);
+void command_mlst(char *);
+void command_mlsd(char *);
 void command_retr(char *);
 void command_list(char *);
 void command_syst(char *);

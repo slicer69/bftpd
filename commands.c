@@ -43,6 +43,23 @@
 # endif
 #endif
 
+#ifdef HAVE_DIRENT_H
+#  include <dirent.h>
+#else
+#    define dirent direct
+#    define NAMLEN(dirent) (dirent)->d_namlen
+#  ifdef HAVE_SYS_NDIR_H
+#    include <sys/ndir.h>
+#  endif
+#  ifdef HAVE_SYS_DIR_H
+#    include <sys/dir.h>
+#  endif
+#  ifdef HAVE_NDIR_H
+#    include <ndir.h>
+#  endif
+#endif
+
+
 #include "mystring.h"
 #include "login.h"
 #include "logging.h"
@@ -336,6 +353,153 @@ void command_eprt(char *params) {
     }
     control_printf(SL_FAILURE, "200 EPRT %s:%i OK", addr, port);
 }
+
+
+void command_mlst(char *filename) {
+    struct stat statbuf;
+    char *mapped;
+
+    // If filename is NULL or empty, use the current directory
+    if (!filename || filename[0] == '\0') {
+        filename = ".";
+    }
+
+    mapped = bftpd_cwd_mappath(filename);
+    if (!mapped) {
+        control_printf(SL_FAILURE, "550 Error: Unable to locate file or directory.");
+        return;
+    }
+
+    if (stat(mapped, &statbuf) == -1) {
+        control_printf(SL_FAILURE, "550 Error: %s.", strerror(errno));
+        free(mapped);
+        return;
+    }
+
+    // Output the details in the MLST format
+    control_printf(SL_SUCCESS, "250- Listing information for %s:", filename);
+
+    // Type of the file
+    if (S_ISREG(statbuf.st_mode)) {
+        control_printf(SL_SUCCESS, " Type=file;");
+    } else if (S_ISDIR(statbuf.st_mode)) {
+        control_printf(SL_SUCCESS, " Type=dir;");
+    } else {
+        control_printf(SL_SUCCESS, " Type=unknown;");
+    }
+
+    // Size of the file
+    control_printf(SL_SUCCESS, " Size=%lld;", (long long)statbuf.st_size);
+
+    // Modification time in YYYYMMDDHHMMSS format
+    struct tm *filetime = gmtime(&statbuf.st_mtime);
+    control_printf(SL_SUCCESS, " Modify=%04d%02d%02d%02d%02d%02d;",
+        filetime->tm_year + 1900, filetime->tm_mon + 1, filetime->tm_mday,
+        filetime->tm_hour, filetime->tm_min, filetime->tm_sec);
+
+    // Permissions
+    control_printf(SL_SUCCESS, " Perm=%s%s%s;",
+        (statbuf.st_mode & S_IRUSR) ? "r" : "-",
+        (statbuf.st_mode & S_IWUSR) ? "w" : "-",
+        (statbuf.st_mode & S_IXUSR) ? "x" : "-");
+
+    // End of MLST response
+    control_printf(SL_SUCCESS, " %s", mapped);
+    control_printf(SL_SUCCESS, "250 End.");
+
+    free(mapped);
+}
+
+
+
+void command_mlsd(char *dirname) {
+    DIR *dir;
+    struct dirent *entry;
+    struct stat statbuf;
+    char *mapped;
+    char fullpath[MAXPATHLEN];
+    struct tm *filetime;
+
+    // If dirname is NULL or empty, use the current directory
+    if (!dirname || dirname[0] == '\0') {
+        dirname = ".";
+    }
+
+    mapped = bftpd_cwd_mappath(dirname);
+    if (!mapped) {
+        control_printf(SL_FAILURE, "550 Error: Unable to locate directory.");
+        return;
+    }
+
+    // Open the directory
+    dir = opendir(mapped);
+    if (!dir) {
+        control_printf(SL_FAILURE, "550 Error: Unable to open directory.");
+        free(mapped);
+        return;
+    }
+
+    // Establish the data connection
+    if (dataconn()) {
+        closedir(dir);
+        free(mapped);
+        return;
+    }
+
+    FILE *datastream = fdopen(sock, "w");
+    if (!datastream) {
+        control_printf(SL_FAILURE, "550 Error: Unable to establish data connection.");
+        closedir(dir);
+        free(mapped);
+        return;
+    }
+
+    // Read directory entries
+    while ((entry = readdir(dir)) != NULL) {
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", mapped, entry->d_name);
+
+        // Skip entries that cannot be stat-ed
+        if (stat(fullpath, &statbuf) == -1) {
+            continue;
+        }
+
+        // Type of the file
+        if (S_ISREG(statbuf.st_mode)) {
+            fprintf(datastream, "Type=file;");
+        } else if (S_ISDIR(statbuf.st_mode)) {
+            fprintf(datastream, "Type=dir;");
+        } else {
+            fprintf(datastream, "Type=unknown;");
+        }
+
+        // Size of the file
+        fprintf(datastream, "Size=%lld;", (long long)statbuf.st_size);
+
+        // Modification time in YYYYMMDDHHMMSS format
+        filetime = gmtime(&statbuf.st_mtime);
+        fprintf(datastream, "Modify=%04d%02d%02d%02d%02d%02d;",
+                filetime->tm_year + 1900, filetime->tm_mon + 1, filetime->tm_mday,
+                filetime->tm_hour, filetime->tm_min, filetime->tm_sec);
+
+        // Permissions
+        fprintf(datastream, "Perm=%s%s%s;",
+                (statbuf.st_mode & S_IRUSR) ? "r" : "-",
+                (statbuf.st_mode & S_IWUSR) ? "w" : "-",
+                (statbuf.st_mode & S_IXUSR) ? "x" : "-");
+
+        // File name
+        fprintf(datastream, " %s\r\n", entry->d_name);
+    }
+
+    // Close the directory and data connection
+    closedir(dir);
+    fclose(datastream);
+    free(mapped);
+
+    control_printf(SL_SUCCESS, "226 Directory listing completed.");
+}
+
+
 
 void command_pasv(char *foo)
 {
@@ -1890,6 +2054,8 @@ const struct command commands[] = {
     {"ADMIN_LOGIN", "(admin)", command_adminlogin, STATE_CONNECTED, 0},*/
       {"MGET", "<sp> pathname", command_mget, STATE_AUTHENTICATED, 0},
       {"MPUT", "<sp> pathname", command_mput, STATE_AUTHENTICATED, 0},
+      {"MLST", "<sp> pathname", command_mlst, STATE_AUTHENTICATED, 1},
+      {"MLSD", "<sp> pathname", command_mlsd, STATE_AUTHENTICATED, 1},
 	{NULL, NULL, NULL, 0, 0}
 };
 
