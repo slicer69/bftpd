@@ -107,5 +107,5 @@ distribute: install
 	rm -rf bftpd-$(VERSION)
 
 tarball: clean
-	(cd .. && tar czf bftpd-$(VERSION).tar.gz bftpd)
+	(cd .. && tar --exclude=".git" -czf bftpd-$(VERSION).tar.gz bftpd) 
 

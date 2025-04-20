@@ -1,5 +1,5 @@
 # Generated automatically from Makefile.in by configure.
-VERSION=6.2
+VERSION=6.3
 CC?=gcc
 INSTALL=/usr/bin/install -c
 prefix=/usr
@@ -108,5 +108,5 @@ distribute: install
 	rm -rf bftpd-$(VERSION)
 
 tarball: clean
-	(cd .. && tar czf bftpd-$(VERSION).tar.gz bftpd)
+	(cd .. && tar --exclude=".git" -czf bftpd-$(VERSION).tar.gz bftpd) 
 
